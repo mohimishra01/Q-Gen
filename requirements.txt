@@ -1,0 +1,32 @@
+# Web Framework & Server
+fastapi
+fastapi[standard]
+uvicorn                # FastAPI ko run karne ke liye
+python-multipart       # FastAPI me Form(...) aur File(...) handle karne ke liye (Very Important!)
+
+# Frontend
+streamlit
+
+# Database
+SQLAlchemy
+
+# llm & Prompting
+langchain
+langchain-groq
+langchain-core
+
+# PDF Processing
+PyMuPDF                # Ye actual package hai jise tum 'import fitz' se call karte ho
+
+# Security & Auth
+python-jose # 'jose' import ke liye (JWT)
+
+passlib          # This is a high-level Python framework. It doesn't do the math itself; instead, it acts as an easy-to-use wrapper around libraries like bcrypt.
+                 # It provides the CryptContext utility, which lets you hash and verify passwords using just one or two lines of Python code
+
+bcrypt==3.2.2    #low-level cryptographic library,It contains the mathematical algorithms required to generate hashed password.
+
+# Utilities
+pydantic>=2.0.0
+requests
+python-dotenv          # 'dotenv' import ke liye

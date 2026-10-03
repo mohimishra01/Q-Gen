@@ -1,0 +1,4 @@
+env/
+.env
+quizapp.db
+__pycache__/
