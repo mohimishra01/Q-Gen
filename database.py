@@ -9,10 +9,8 @@ load_dotenv()
 # SQLite DB file ka naam
 DATABASE_URL =os.getenv("DATABASE_URL")
 
-# SQLite me 'check_same_thread=False' zaroori hota hai FastAPI (multi-thread) ke liye
-engine = create_engine(
-    DATABASE_URL, connect_args={"check_same_thread": False}
-)
+# mysql coonection
+engine = create_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

@@ -9,6 +9,8 @@ streamlit
 
 # Database
 SQLAlchemy
+psycopg2-binary        # psycopg2 is gnerally downloaded but i opted binary bcz its basicallay a wrapper over c code
+                       # require c/c++ visual studio code development tools but  binary version is precompiled and bypass that need
 
 # llm & Prompting
 langchain
