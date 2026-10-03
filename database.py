@@ -6,10 +6,10 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-# SQLite DB file ka naam
+# postgresql DB server link
 DATABASE_URL =os.getenv("DATABASE_URL")
 
-# mysql coonection
+# postgresql coonection
 engine = create_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
