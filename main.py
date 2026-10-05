@@ -436,3 +436,7 @@ def get_leaderboard(quiz_id: int, current_user: dict = Depends(verification), db
     result = [{"username": row.student_name, "score": row.score} for row in leaderboard_data]
     
     return {"quiz_id": quiz_id, "leaderboard": result}
+
+@app.get("/")
+def health_check():
+    return {"status": "ok"}
