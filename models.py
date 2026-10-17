@@ -31,22 +31,22 @@ class Quiz(Base):
     __tablename__ = "quizzes"
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, nullable=False)
-    teacher_id = Column(Integer, ForeignKey("teachers.id"))
-    batch_id = Column(String, index=True)
+    teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=False)
+    batch_id = Column(String, index=True, nullable=False)
 
 class Question(Base):
     __tablename__ = "questions"
     id = Column(Integer, primary_key=True, index=True)
-    quiz_id = Column(Integer, ForeignKey("quizzes.id"))
-    question_text = Column(String)
-    options = Column(JSON) # Ab ye direct Python lists/dicts handle karega!
-    correct_answer = Column(String)
+    quiz_id = Column(Integer, ForeignKey("quizzes.id"), nullable=False)
+    question_text = Column(String,nullable=False)
+    options = Column(JSON, nullable=False) # Ab ye direct Python lists/dicts handle karega!
+    correct_answer = Column(String, nullable=False)
 
 class Attempt(Base):
     __tablename__ = "attempts"
     id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey("students.id"))
-    quiz_id = Column(Integer, ForeignKey("quizzes.id"))
+    student_id = Column(Integer, ForeignKey("students.id"), nullable=False)
+    quiz_id = Column(Integer, ForeignKey("quizzes.id"), nullable=False)
     score = Column(Integer, nullable=False)
 
 """
