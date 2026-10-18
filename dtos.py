@@ -14,13 +14,17 @@ class StudentProfileCreate(BaseModel):
     student_name: str
     email: str
     contact: str
-    batch_id: str
+    batch_id: int
 
 class TeacherProfileCreate(BaseModel):
     teacher_name: str
     email: str
     contact: str
     department: str
+
+#teacher_batches junction table 
+class BatchAssign(BaseModel):
+    batch_name: str
 
 # llm ko strictly output format specify krne ke liye
 class QuestionCreate(BaseModel):
@@ -37,7 +41,7 @@ class QuestionSaveSchema(BaseModel):
     options: List[str]
     correct_answer: str
 class QuizSaveSchema(BaseModel):
-    batch_id: str
+    batch_id: int
     topic: str
     questions: List[QuestionSaveSchema]
 
@@ -78,6 +82,6 @@ class ScoreResponse(BaseModel):
 class teacher_created_quizes(BaseModel):
     id: int
     title: str
-    batch_id: str
+    batch_id: int
 
     model_config = ConfigDict(from_attributes=True)

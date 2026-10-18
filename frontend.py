@@ -83,201 +83,7 @@ def auth_page():
                     st.error(f"Error: {error_msg}")
 
 # ==========================================
-# 2. student dashboard
-# ==========================================
-
-def student_dashboard():
-
-    # Har protected API call me token bhejenge is header ke through
-    headers = {"Authorization": f"Bearer {st.session_state.token}"}
-    
-    # profile checking before moving to other features
-    if "student_profile" not in st.session_state:
-        status_res = requests.get(f"{API_URL}/student/check_profile", headers=headers)
-        
-        if status_res.status_code == 200:
-            st.session_state.student_profile= status_res.json().get("profile_completed", False)
-        else:
-            st.session_state.student_profile= False
-    
-    # --- Profile completion form ---
-    if not st.session_state.student_profile:
-        st.info("Welcome! Please complete your student profile to access quizzes.")
-        
-        with st.form("profile_setup_form"):
-            st.write("### Profile Setup")
-            name = st.text_input("Full Name")
-            email = st.text_input("Email Address")
-            contact = st.text_input("Contact Number")
-            batch = st.text_input("Batch ID (e.g., BATCH-01)")
-            
-            submit_profile = st.form_submit_button("Save Profile")
-            
-            if submit_profile:
-                payload = {
-                    "student_name": name,
-                    "email": email,
-                    "contact": contact,
-                    "batch_id": batch
-                }
-                res = requests.post(f"{API_URL}/student/complete_profile", json=payload, headers=headers)
-                
-                # Success: Profile created
-                if res.status_code == 200:
-                    st.success("Profile saved successfully!")
-                    st.session_state.student_profile= True
-                    time.sleep(1)
-                    st.rerun()
-                    
-                # safety guard: agar internet drop or double click by user then it will handle it and prevent infite loop since before the first save success msg this request  sent and make variable true in next line.
-                elif res.status_code == 400 and "already exists" in res.text.lower():
-                    st.session_state.student_profile = True
-                    st.rerun()
-                    
-                else:
-                    st.error(res.json().get("detail", "Error saving profile"))
-                    
-        # Stop executing the rest of the page until they pass the gate
-        st.stop()
-
-    st.sidebar.title("Student Panel")
-    page = st.sidebar.radio(
-        "Navigation", 
-        ["👤 My Profile", "📚 Live Quizzes", "🏆 My Scores"]
-    )
-
-    # Bottom-aligned Logout
-    st.sidebar.markdown("<br><br><br><br><br>", unsafe_allow_html=True)
-    st.sidebar.divider()
-    if st.sidebar.button("🚪 Logout", use_container_width=True):
-        st.session_state.token = None
-        st.session_state.role = None
-        if "profile_data" in st.session_state:
-            del st.session_state.profile_data
-        if "active_quiz_id" in st.session_state:
-            del st.session_state.active_quiz_id    
-        st.rerun()
-    
-
-    # --- PAGE: MY PROFILE ---
-    if page == "👤 My Profile":
-        st.subheader("My Profile")
-        
-        if "profile_data" not in st.session_state:
-            with st.spinner("Loading profile..."):
-                res = requests.get(f"{API_URL}/student/me", headers=headers)
-                if res.status_code == 200:
-                    st.session_state.profile_data = res.json()
-                else:
-                    st.error("Failed to load profile")
-                    
-        if "profile_data" in st.session_state:
-            p = st.session_state.profile_data
-            st.info(f"👤 **Name:** {p.get('name', 'N/A')}")
-            st.info(f"📧 **Email:** {p.get('email', 'N/A')}")
-            st.info(f"📞 **Contact:** {p.get('contact', 'N/A')}")
-            st.info(f"🏫 **Batch Id:** {p.get('batch_id', 'N/A')}")
-
-    
-    # ---  LIVE QUIZZES ---
-    elif page  == "📚 Live Quizzes":
-        st.subheader("Available Quizzes")
-
-        # AGAR QUIZ ACTIVE NAHI HAI, TOH SIRF DROPDOWN DIKHAO
-        if not st.session_state.get("active_quiz_id"):
-            # API call to get quizzes not yet attempted
-            response = requests.get(f"{API_URL}/available-quizzes", headers=headers)
-            
-            if response.status_code == 200:
-                quizzes = response.json()
-                if not quizzes:
-                    st.info("No new quizzes available for your batch.")
-                else:
-                    # Quiz select karne ke liye dropdown
-                    quiz_options = {q['title']: q['id'] for q in quizzes}
-                    selected_quiz_title = st.selectbox("Select a Quiz to Attempt", list(quiz_options.keys()))
-                
-                    if st.button("Start Quiz"):
-                        # Save selected quiz ID in session to show the questions
-                        st.session_state.active_quiz_id = quiz_options[selected_quiz_title]
-                        st.rerun()
-            else:
-                st.error(f"API Error: {response.status_code} - {response.text}")
-        
-        # --- RENDER THE QUIZ FORM IF A QUIZ IS SELECTED ---
-        else:
-            quiz_id = st.session_state.active_quiz_id
-            quiz_response = requests.get(f"{API_URL}/quiz/{quiz_id}", headers=headers)
-            
-            if quiz_response.status_code == 200:
-                quiz_data = quiz_response.json()
-                st.write(f"### {quiz_data['quiz_title']}")
-                
-                with st.form("quiz_attempt_form"):
-                    student_answers = []
-                    
-                    # Loop through questions and render radio buttons
-                    for q in quiz_data['questions']:
-                        st.markdown(f"**Q: {q['question_text']}**")
-                        # Radio button returns the selected string
-                        selected_opt = st.radio("Options", q['options'], index=None, key=f"q_{q['id']}")
-                        
-                        student_answers.append({
-                            "question_id": q['id'],
-                            "selected_option": selected_opt
-                        })
-                        st.divider() # Ek line draw karega visual separation ke liye
-                        
-                    submit_quiz = st.form_submit_button("Submit Answers")
-                    
-                    if submit_quiz:
-                        payload = {
-                            "quiz_id": quiz_id,
-                            "answers": student_answers
-                        }
-                        # API call to submit answers
-                        submit_res = requests.post(f"{API_URL}/submit-quiz", json=payload, headers=headers)
-                        
-                        if submit_res.status_code == 200:
-                            score_data = submit_res.json()
-                            st.success(f"Quiz Submitted! Your score: {score_data['score']} / {score_data['total_Questions']}")
-                            # freezes screen so user can see score
-                            time.sleep(2)
-                        # Catch the "already submitted" error from the backend
-                        elif submit_res.status_code == 400 and "already" in submit_res.text.lower():
-                            st.warning("You have already submitted this quiz!")
-                        else:
-                            st.error(submit_res.json().get("detail", "Error submitting quiz"))
-            else:
-                st.error("Failed to load quiz details.")
-                if st.button("⬅ Back"):
-                    st.session_state.active_quiz_id = None
-                    st.rerun()
-
-
-            # Clear the active quiz so it returns to the selection screen
-            st.write("---")
-            if st.button("⬅ Back to Available Quizzes"):
-                st.session_state.active_quiz_id = None
-                st.rerun()         
-
-    # --- MY SCORES ---
-    elif page =="🏆 My Scores":
-        st.subheader("My Performance")
-        score_res = requests.get(f"{API_URL}/my-scores", headers=headers)
-        
-        if score_res.status_code == 200:
-            scores = score_res.json()
-            if scores:
-                # Streamlit automatically renders list of dicts as a interactive table,allows users to scroll, resize, and click column headers to sort the data.
-                st.dataframe(scores, use_container_width=True, hide_index=True)
-                #use_container_width=True-forces the grid to stretch to 100% of the available screen or column width.
-                #hide_index=True: Hides the default system row numbers (0, 1, 2)
-            else:
-                st.info("You haven't attempted any quizzes yet.")
-
-# ==========================================
-# 3. Teacher Dashboard
+# 2. Teacher Dashboard
 # ==========================================
 
 def teacher_dashboard():
@@ -332,7 +138,7 @@ def teacher_dashboard():
                     st.rerun()
                         
                 # Catch the returning user edge-case!
-                elif res.status_code == 400 and "already exists" in res.text.lower():
+                elif res.status_code == 409 and "already exists" in res.text.lower():
                     st.session_state.teacher_profile= True
                     st.rerun()
                         
@@ -346,7 +152,7 @@ def teacher_dashboard():
     st.sidebar.title("Teacher Panel")
     page = st.sidebar.radio(
         "Navigation", 
-        ["👤 My Profile","📝 Create Quiz", "📚 My Quizzes", "🏆 Leaderboard"]
+        ["👤 My Profile", "🏫 Manage Batches", "📝 Create Quiz", "📚 My Quizzes", "🏆 Leaderboard"]
     )
 
     # Bottom-aligned Logout
@@ -380,7 +186,45 @@ def teacher_dashboard():
             st.info(f"📞 **Contact:** {p.get('contact', 'N/A')}")
             st.info(f"🏫 **Department:** {p.get('department', 'N/A')}")
     
-   
+    # --- PAGE: MANAGE BATCHES ---
+    elif page == "🏫 Manage Batches":
+        st.subheader("Manage Assigned Batches")
+        
+        # Fetch active batches linked to this teacher
+        my_batches_res = requests.get(f"{API_URL}/teacher/my-batches", headers=headers)
+        if my_batches_res.status_code == 200:
+            assigned = my_batches_res.json()
+            if assigned:
+                st.write("### Your Active Batches:")
+                for b in assigned:
+                    st.info(f"🏫 **{b['name']}** (Batch ID: {b['id']})")
+            else:
+                st.info("You are not assigned to any batches yet.")
+        
+        st.divider()
+        st.write("### Assign / Claim a Batch")
+        with st.form("assign_batch_form"):
+            new_batch_name = st.text_input("Batch Code / Name (e.g., CS-2026)")
+            assign_btn = st.form_submit_button("Add Batch")
+            
+            if assign_btn:
+                if not new_batch_name:
+                    st.error("Batch name cannot be empty.")
+                else:
+                    assign_res = requests.post(
+                        f"{API_URL}/teacher/assign-batch",
+                        json={"batch_name": new_batch_name},
+                        headers=headers
+                    )
+                    if assign_res.status_code == 200:
+                        st.success(f"Successfully assigned to batch '{new_batch_name}'!")
+                        time.sleep(1)
+                        st.rerun()
+                    elif assign_res.status_code == 409:
+                        st.warning("You are already assigned to this batch.")
+                    else:
+                        st.error(assign_res.json().get("detail", "Failed to assign batch."))
+    
     # --- TO CREATE QUIZ ---
     elif page == "📝 Create Quiz":
         st.subheader("Generate Quiz With AI")
@@ -404,10 +248,23 @@ def teacher_dashboard():
         if "preview_quiz" not in st.session_state:
             st.session_state.preview_quiz=None
 
+        # Fetch teacher's batches for the dropdown
+        my_batches_res = requests.get(f"{API_URL}/teacher/my-batches", headers=headers)
+        teacher_batch_map = {}
+        if my_batches_res.status_code == 200:
+            for b in my_batches_res.json():
+                teacher_batch_map[b["name"]] = b["id"]
+        
         with st.form("Create Quiz"):
             col_a, col_b = st.columns(2)
             with col_a:
-                batch_id = st.text_input("Batch ID (e.g., CS-2026)")
+                if teacher_batch_map:
+                    selected_batch_name = st.selectbox("Select Batch", list(teacher_batch_map.keys()))
+                    batch_id = teacher_batch_map[selected_batch_name] # Integer ID
+                else:
+                    st.warning("Please assign yourself to a batch in 'Manage Batches' first.")
+                    batch_id = None
+                    
                 num_questions = st.number_input("Number of Questions", min_value=1, max_value=50, value=5)
             with col_b:
                 topic = st.text_input("Topic")
@@ -574,6 +431,217 @@ def teacher_dashboard():
                        st.error(lb_res.json().get("detail", "Failed to fetch leaderboard."))
             else:
                 st.info("You are yet to create any quiz")
+
+
+# ==========================================
+# 3. student dashboard
+# ==========================================
+
+def student_dashboard():
+
+    # Har protected API call me token bhejenge is header ke through
+    headers = {"Authorization": f"Bearer {st.session_state.token}"}
+    
+    # profile checking before moving to other features
+    if "student_profile" not in st.session_state:
+        status_res = requests.get(f"{API_URL}/student/check_profile", headers=headers)
+        
+        if status_res.status_code == 200:
+            st.session_state.student_profile= status_res.json().get("profile_completed", False)
+        else:
+            st.session_state.student_profile= False
+    
+    # --- Profile completion form ---
+    if not st.session_state.student_profile:
+        st.info("Welcome! Please complete your student profile to access quizzes.")
+
+        # Fetching available batches for dropdown
+        batches_res = requests.get(f"{API_URL}/all-batches", headers=headers)
+        batch_map = {}
+        if batches_res.status_code == 200:
+            for b in batches_res.json():
+                batch_map[b["name"]] = b["id"]
+
+        with st.form("profile_setup_form"):
+            st.write("### Profile Setup")
+            name = st.text_input("Full Name")
+            email = st.text_input("Email Address")
+            contact = st.text_input("Contact Number")
+
+            if batch_map:
+                selected_batch_name = st.selectbox("Select Your Batch", list(batch_map.keys()))
+                batch_id = batch_map[selected_batch_name]
+            else:
+                st.warning("No batches available in the system yet. Please contact a teacher.")
+                batch_id = None
+
+            submit_profile = st.form_submit_button("Save Profile")
+            
+            if submit_profile:
+                if not batch_id:
+                    st.error("Please select a valid batch.")
+                else:
+                    payload = {
+                        "student_name": name,
+                        "email": email,
+                        "contact": contact,
+                        "batch_id": batch_id
+                        }
+                    res = requests.post(f"{API_URL}/student/complete_profile", json=payload, headers=headers)
+                
+                    # Success: Profile created
+                    if res.status_code == 200:
+                        st.success("Profile saved successfully!")
+                        st.session_state.student_profile= True
+                        time.sleep(1)
+                        st.rerun()
+                
+                    # safety guard: agar internet drop or double click by user then it will handle it and prevent infite loop since before the first save success msg this request  sent and make variable true in next line.
+                    elif res.status_code == 409 and "already exists" in res.text.lower():
+                        st.session_state.student_profile = True
+                        st.rerun()
+                    else:
+                        st.error(res.json().get("detail", "Error saving profile"))
+                    
+        # Stop executing the rest of the page until they pass the gate
+        st.stop()
+
+    st.sidebar.title("Student Panel")
+    page = st.sidebar.radio(
+        "Navigation", 
+        ["👤 My Profile", "📚 Live Quizzes", "🏆 My Scores"]
+    )
+
+    # Bottom-aligned Logout
+    st.sidebar.markdown("<br><br><br><br><br>", unsafe_allow_html=True)
+    st.sidebar.divider()
+    if st.sidebar.button("🚪 Logout", use_container_width=True):
+        st.session_state.token = None
+        st.session_state.role = None
+        if "profile_data" in st.session_state:
+            del st.session_state.profile_data
+        if "active_quiz_id" in st.session_state:
+            del st.session_state.active_quiz_id    
+        st.rerun()
+    
+
+    # --- PAGE: MY PROFILE ---
+    if page == "👤 My Profile":
+        st.subheader("My Profile")
+        
+        if "profile_data" not in st.session_state:
+            with st.spinner("Loading profile..."):
+                res = requests.get(f"{API_URL}/student/me", headers=headers)
+                if res.status_code == 200:
+                    st.session_state.profile_data = res.json()
+                else:
+                    st.error("Failed to load profile")
+                    
+        if "profile_data" in st.session_state:
+            p = st.session_state.profile_data
+            st.info(f"👤 **Name:** {p.get('name', 'N/A')}")
+            st.info(f"📧 **Email:** {p.get('email', 'N/A')}")
+            st.info(f"📞 **Contact:** {p.get('contact', 'N/A')}")
+            st.info(f"🏫 **Batch Id:** {p.get('batch_id', 'N/A')}")
+
+    
+    # ---  LIVE QUIZZES ---
+    elif page  == "📚 Live Quizzes":
+        st.subheader("Available Quizzes")
+
+        # AGAR QUIZ ACTIVE NAHI HAI, TOH SIRF DROPDOWN DIKHAO
+        if not st.session_state.get("active_quiz_id"):
+            # API call to get quizzes not yet attempted
+            response = requests.get(f"{API_URL}/available-quizzes", headers=headers)
+            
+            if response.status_code == 200:
+                quizzes = response.json()
+                if not quizzes:
+                    st.info("No new quizzes available for your batch.")
+                else:
+                    # Quiz select karne ke liye dropdown
+                    quiz_options = {q['title']: q['id'] for q in quizzes}
+                    selected_quiz_title = st.selectbox("Select a Quiz to Attempt", list(quiz_options.keys()))
+                
+                    if st.button("Start Quiz"):
+                        # Save selected quiz ID in session to show the questions
+                        st.session_state.active_quiz_id = quiz_options[selected_quiz_title]
+                        st.rerun()
+            else:
+                st.error(f"API Error: {response.status_code} - {response.text}")
+        
+        # --- RENDER THE QUIZ FORM IF A QUIZ IS SELECTED ---
+        else:
+            quiz_id = st.session_state.active_quiz_id
+            quiz_response = requests.get(f"{API_URL}/quiz/{quiz_id}", headers=headers)
+            
+            if quiz_response.status_code == 200:
+                quiz_data = quiz_response.json()
+                st.write(f"### {quiz_data['quiz_title']}")
+                
+                with st.form("quiz_attempt_form"):
+                    student_answers = []
+                    
+                    # Loop through questions and render radio buttons
+                    for q in quiz_data['questions']:
+                        st.markdown(f"**Q: {q['question_text']}**")
+                        # Radio button returns the selected string
+                        selected_opt = st.radio("Options", q['options'], index=None, key=f"q_{q['id']}")
+                        
+                        student_answers.append({
+                            "question_id": q['id'],
+                            "selected_option": selected_opt
+                        })
+                        st.divider() # Ek line draw karega visual separation ke liye
+                        
+                    submit_quiz = st.form_submit_button("Submit Answers")
+                    
+                    if submit_quiz:
+                        payload = {
+                            "quiz_id": quiz_id,
+                            "answers": student_answers
+                        }
+                        # API call to submit answers
+                        submit_res = requests.post(f"{API_URL}/submit-quiz", json=payload, headers=headers)
+                        
+                        if submit_res.status_code == 200:
+                            score_data = submit_res.json()
+                            st.success(f"Quiz Submitted! Your score: {score_data['score']} / {score_data['total_Questions']}")
+                            # freezes screen so user can see score
+                            time.sleep(2)
+                        # Catch the "already submitted" error from the backend
+                        elif submit_res.status_code == 409 and "already" in submit_res.text.lower():
+                            st.warning("You have already submitted this quiz!")
+                        else:
+                            st.error(submit_res.json().get("detail", "Error submitting quiz"))
+            else:
+                st.error("Failed to load quiz details.")
+                if st.button("⬅ Back"):
+                    st.session_state.active_quiz_id = None
+                    st.rerun()
+
+
+            # Clear the active quiz so it returns to the selection screen
+            st.write("---")
+            if st.button("⬅ Back to Available Quizzes"):
+                st.session_state.active_quiz_id = None
+                st.rerun()         
+
+    # --- MY SCORES ---
+    elif page =="🏆 My Scores":
+        st.subheader("My Performance")
+        score_res = requests.get(f"{API_URL}/my-scores", headers=headers)
+        
+        if score_res.status_code == 200:
+            scores = score_res.json()
+            if scores:
+                # Streamlit automatically renders list of dicts as a interactive table,allows users to scroll, resize, and click column headers to sort the data.
+                st.dataframe(scores, use_container_width=True, hide_index=True)
+                #use_container_width=True-forces the grid to stretch to 100% of the available screen or column width.
+                #hide_index=True: Hides the default system row numbers (0, 1, 2)
+            else:
+                st.info("You haven't attempted any quizzes yet.")
+
 
 # ==========================================
 #  4.program comes here first---ROUTING LOGIC

@@ -38,14 +38,6 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_schema = OAuth2PasswordBearer(tokenUrl="login")
 
 
-# Dependency: API endpoints ko DB connection dene ke liye
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 def hash_password(password: str):
     return pwd_context.hash(password)
 
@@ -58,15 +50,110 @@ def create_token(data: dict):
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-# --- APIs ---
+# ==========================================
+# DEPENDENCIES
+# ==========================================
+
+# 1.API endpoints ko DB connection dene ke liye
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+#  2.VERIFY TOKEN (authentication)
+def verification(token: str = Depends(oauth2_schema)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload  # Ab sirf username nahi, pura payload bhejenge (jisme role bhi hai)
+    except:
+        raise HTTPException(status_code=401, detail="Unauthorized access")
+
+# 3.ROLE BASED ACCESS: TEACHER
+def require_teacher(current_user: dict = Depends(verification)):
+    if current_user.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="Access denied: Teachers only")
+    return current_user
+
+# 4.ROLE BASED ACCESS: STUDENT 
+def require_student(current_user: dict = Depends(verification)):
+    if current_user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Access denied: Students only")
+    return current_user
+
+# 5.RBAC for generating the quiz preview ("/generate_preview")---
+def teacher_batch_ownership(          
+    batch_id: int = Form(...),
+    current_user: dict = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    teacher = db.query(models.Teacher).filter(models.Teacher.user_id == current_user.get("user_id")).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher profile not found")
+
+    authority= db.query(models.TeacherBatch).filter_by(teacher_id=teacher.id, batch_id=batch_id).first()
+    if not authority:
+        raise HTTPException(status_code=403, detail="You are not assigned to this batch")
+   
+    return teacher  # Returns the SQLAlchemy Teacher object directly to endpoints.
+
+# 6.RBAC for saving quiz and access leaderboard( "/save_quiz" & "/quiz/{quiz_id}/leaderboard")---
+def teacher_BatchAndQuiz_ownership(          
+    quiz_id: Optional[int] = None,
+    quiz_to_save: Optional[dtos.QuizSaveSchema] = None,
+    current_user: dict = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    teacher = db.query(models.Teacher).filter(models.Teacher.user_id == current_user.get("user_id")).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher profile not found")
+
+    # Handles GET /quiz/{quiz_id}/leaderboard
+    if quiz_id is not None:
+        if not db.query(models.Quiz).filter_by(id=quiz_id, teacher_id=teacher.id).first():
+            raise HTTPException(status_code=403, detail="You do not own this quiz")
+
+    # Handles POST /save_quiz
+    if quiz_to_save is not None:
+        if not db.query(models.TeacherBatch).filter_by(teacher_id=teacher.id, batch_id=quiz_to_save.batch_id).first():
+            raise HTTPException(status_code=403, detail="You are not assigned to this batch")
+
+    return teacher
+
+# 7. RBAC: STUDENT (Checks if Quiz belongs to Student's Batch) ---
+def check_student_authority(
+    quiz_id: Optional[int] = None,                  # Grabs {quiz_id} from URL in GET /quiz/{quiz_id}
+    submission: Optional[dtos.QuizSubmit] = None,   # Grabs JSON body in POST /submit-quiz
+    current_user: dict = Depends(require_student),  # Chains Role Check + JWT Verification!
+    db: Session = Depends(get_db)
+):
+    student = db.query(models.Student).filter(models.Student.user_id == current_user.get("user_id")).first()
+    if not student:
+        raise HTTPException(status_code=403, detail="Complete your student profile first")
+
+    target_quiz_id = quiz_id if quiz_id is not None else (submission.quiz_id if submission else None)
+    quiz = db.query(models.Quiz).filter(models.Quiz.id == target_quiz_id).first()
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+
+    if quiz.batch_id != student.batch_id:
+        raise HTTPException(status_code=403, detail="This quiz does not belong to your batch")
+
+    return student  # Returns the SQLAlchemy Student object directly to endpoints
+
+# ==========================================
+# SHARED APIs
+# ==========================================
 
 # 1. REGISTER API (Naya user banayega)
 @app.post("/register") #fastapi path operation decorater
 def register(user: dtos.NewUser, db: Session = Depends(get_db)):
+    
     # Check agar user pehle se hai
     existing_user = db.query(models.User).filter(models.User.username == user.username).first()
     if existing_user:
-        raise HTTPException(status_code=400, detail="Username already registered")
+        raise HTTPException(status_code=409, detail="Username already registered")
     
     # Password hash karo aur DB me save karo
     hashed_pwd = hash_password(user.password)
@@ -92,178 +179,6 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
     return {"access_token": token, "token_type": "bearer",}
 
-# 3. VERIFY TOKEN (authentication)
-def verification(token: str = Depends(oauth2_schema)):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload  # Ab sirf username nahi, pura payload bhejenge (jisme role bhi hai)
-    except:
-        raise HTTPException(status_code=401, detail="Unauthorized access")
-
-
-# ==========================================
-# STUDENT APIs
-# ==========================================
-
-# 1.1 student profile data saving in db
-@app.post("/student/complete_profile")
-def complete_profile(profile: dtos.StudentProfileCreate, current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-    # 1. Only students can access this
-    if current_user.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Only students can complete a student profile")
-
-    user_id=current_user.get("user_id")
-    existing_student = db.query(models.Student).filter(models.Student.user_id == user_id).first()
-    if existing_student:
-        raise HTTPException(status_code=400, detail="Profile already exists!")
-
-    # 2. Create the domain record linking to the auth user_id
-    new_student = models.Student(
-        user_id=user_id,
-        student_name=profile.student_name,
-        email=profile.email,
-        contact=profile.contact,
-        batch_id=profile.batch_id
-    )
-    
-    db.add(new_student)
-    db.commit()
-    
-    return {"message": "Profile completed successfully!"}
-
-#1.2 checking the profile complete before accessing other services
-@app.get("/student/check_profile")
-def check_profile(current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-    #RBAC
-    if current_user.get("role") != "student":
-           raise HTTPException(status_code=403, detail="Only students can complete a student profile")
-   
-    # Check if a student record exists for this user_id
-    student = db.query(models.Student).filter(models.Student.user_id == current_user.get("user_id")).first()
-    return {"profile_completed": student is not None}
-
-#1.3 provide the profile data to student on request
-@app.get("/student/me")
-def get_student_profile(current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-    # 1. Fetch the domain profile using the Auth ID
-    student = db.query(models.Student).filter(models.Student.user_id == current_user.get("user_id")).first()
-    
-    if not student:
-        raise HTTPException(status_code=404, detail="Profile not found")
-        
-    # 2. Return the student-specific data
-    return {
-        "name": student.student_name, # Note your DB column is student_name
-        "email": student.email,
-        "contact": student.contact,
-        "batch_id": student.batch_id  # Student specific field
-    }
-
-
-# 2 AVAILABLE QUIZZES (Batch based filtering)
-@app.get("/available-quizzes")
-def get_available_quizzes(current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-    if current_user.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    # 1. extracting the Student ki ID & batch
-    student = db.query(models.Student).filter(models.Student.user_id == current_user.get("user_id")).first()
-
-    if not student:
-        return [] # Returns an empty list 
-    
-    student_batch = student.batch_id
-
-    # 2. Subquery: Wo saari Quiz IDs lao jo student already attempt kar chuka hai
-    attempted_quiz_ids = db.query(models.Attempt.quiz_id).filter(models.Attempt.student_id == student.id)
-
-    
-    # 3. Main Query: Batch match karo AUR (~in_) filter lagao ki ID attempted list me NA ho
-    available_quizzes = db.query(models.Quiz).filter(
-             models.Quiz.batch_id == student_batch,
-             ~models.Quiz.id.in_(attempted_quiz_ids)  # '~' ka matlab SQL me NOT hota hai
-        ).all()
-    
-    return available_quizzes
-
-# 3. GET QUIZ BY ID (For attempting the quiz - Hides correct answers)
-@app.get("/quiz/{quiz_id}", response_model=dtos.QuizSentDB)
-def get_quiz_to_attempt(quiz_id: int, current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-    if current_user.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    quiz = db.query(models.Quiz).filter(models.Quiz.id == quiz_id).first()
-    if not quiz:
-        raise HTTPException(status_code=404, detail="Quiz not found")
-        
-    questions = db.query(models.Question).filter(models.Question.quiz_id == quiz_id).all()
-    
-    #  Pydantic khud 'correct_answer' hata dega.
-    return {"quiz_title": quiz.title, "questions": questions}
-
-# 4. SUBMIT QUIZ & EVALUATION ENGINE
-@app.post("/submit-quiz")
-def submit_quiz(submission: dtos.QuizSubmit, current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-    # Check if user is a student
-    if current_user.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Only students can submit quizzes")
-        
-    student = db.query(models.Student).filter(models.Student.user_id== current_user.get("user_id")).first()
-
-    if not student:
-        raise HTTPException(status_code=403, detail="Student profile incomplete. Please update your profile first.")
-
-    # Check if student already submitted this quiz
-    #"Double Submit" ya "Race Condition" kehte hain,network slow hone ki wajah se request retry ho jate hai
-    existing_attempt = db.query(models.Attempt).filter_by(
-        student_id=student.id, 
-        quiz_id=submission.quiz_id
-    ).first()
-    
-    if existing_attempt:
-        raise HTTPException(status_code=400, detail="You have already attempted this quiz!")
-
-    #  Database se saare questions ek baar me fetch kar lo
-    db_questions = db.query(models.Question).filter(models.Question.quiz_id == submission.quiz_id).all()
-    
-    # Simple loop se score calculate karo
-    score = 0
-    for student_ans in submission.answers:
-        for real_q in db_questions:
-            # Agar Question ID match kare AUR answer bhi match kare
-            if student_ans.question_id == real_q.id and student_ans.selected_option == real_q.correct_answer:
-                score += 1
-                break  # Match mil gaya, agle answer par jao
-                
-    # Score DB me save karo
-    attempt = models.Attempt(student_id=student.id, quiz_id=submission.quiz_id, score=score)
-    db.add(attempt)
-    db.commit()
-    
-    return {"message": "Quiz submitted Successfully!", "total_Questions": len(db_questions),"score": score}
-
-# 5. MY SCORES API (Student)
-@app.get("/my-scores", response_model=List[dtos.ScoreResponse])
-def get_my_scores(current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-    # 1. RBAC Check
-    if current_user.get("role") != "student":
-        raise HTTPException(status_code=403, detail="Access denied")
-        
-    student = db.query(models.Student).filter(models.Student.user_id == current_user.get("user_id")).first()
-
-    if not student:
-        return []
-    
-    # 2. SQL Join: Attempts aur Quiz table ko jodna
-    scores_data = db.query(
-        models.Attempt.quiz_id,
-        models.Quiz.title.label("quiz_title"),
-        models.Attempt.score
-    ).join(models.Quiz, models.Attempt.quiz_id == models.Quiz.id)\
-     .filter(models.Attempt.student_id == student.id).all()
-    
-    # FastAPI aur Pydantic automatically is data ko List[ScoreResponse] me format kar denge
-    return scores_data
 
 # ==========================================
 # TEACHER APIs
@@ -271,15 +186,12 @@ def get_my_scores(current_user: dict = Depends(verification), db: Session = Depe
 
 # 1.1 teacher profile data saving in db
 @app.post("/teacher/complete_profile")
-def complete_profile(profile: dtos.TeacherProfileCreate, current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-    # 1. Only students can access this
-    if current_user.get("role") != "teacher":
-        raise HTTPException(status_code=403, detail="Only teachers can complete a teacher profile")
-
+def complete_profile(profile: dtos.TeacherProfileCreate, current_user: dict = Depends(require_teacher), db: Session = Depends(get_db)):
+   
     user_id=current_user.get("user_id")
     existing_teacher = db.query(models.Teacher).filter(models.Teacher.user_id == user_id).first()
     if existing_teacher:
-        raise HTTPException(status_code=400, detail="Profile already exists!")
+        raise HTTPException(status_code=409, detail="Profile already exists!")
 
     # 2. Create the domain record linking to the auth user_id
     new_teacher = models.Teacher(
@@ -295,28 +207,22 @@ def complete_profile(profile: dtos.TeacherProfileCreate, current_user: dict = De
     
     return {"message": "Profile completed successfully!"}
 
+
 #1.2 checking the completion of teacher profile before providing other services
 @app.get("/teacher/check_profile")
-def check_profile(current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-    #RBAC
-    if current_user.get("role") != "teacher":
-           raise HTTPException(status_code=403, detail="Only teachers are allowed")
+def check_profile(current_user: dict = Depends(require_teacher), db: Session = Depends(get_db)):
    
     # Check if a student record exists for this user_id
     teacher = db.query(models.Teacher).filter(models.Teacher.user_id == current_user.get("user_id")).first()
     return {"profile_completed": teacher is not None}
 
+
 #1.3 to provide profile data to teacher on request
 @app.get("/teacher/me")
-def get_teacher_profile(current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-
-    #1  RBAC (Gatekeeper): Sirf teachers ko allow karo
-    if current_user.get("role") != "teacher":
-        raise HTTPException(status_code=403, detail="Access denied: Only teachers can create quizzes")
-        
-    # 1. Fetch the domain profile using the Auth ID
+def get_teacher_profile(current_user: dict = Depends(require_teacher), db: Session = Depends(get_db)):
+   
+    # 1. Fetching the teacher roe object 
     teacher = db.query(models.Teacher).filter(models.Teacher.user_id == current_user.get("user_id")).first()
-    
     if not teacher:
         raise HTTPException(status_code=404, detail="Profile not found")
         
@@ -329,25 +235,84 @@ def get_teacher_profile(current_user: dict = Depends(verification), db: Session 
     }
 
 
+#1.4  It assigns batches to teachers
+@app.post("/teacher/assign-batch")
+def batch_assignment(batch_data: dtos.BatchAssign, 
+                    current_user: dict = Depends(require_teacher), 
+                    db: Session = Depends(get_db)
+                    ):
+    
+    # 1. Fetch the teacher's row object
+    teacher = db.query(models.Teacher).filter(models.Teacher.user_id == current_user.get("user_id")).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher profile not found. Complete profile first.")
+
+    # 2.Normalizing batch name (e.g., " cs-2026 " -> "CS-2026") to prevent case/space duplicates
+    clean_batch_name = batch_data.batch_name.strip().upper()
+
+    # 3. Get-or-Create in BATCHES table
+    batch = db.query(models.Batch).filter(models.Batch.name == clean_batch_name).first()
+    if not batch:
+        batch = models.Batch(name=clean_batch_name)
+        db.add(batch)
+        db.commit()
+        db.refresh(batch)  # Fetches the auto-generated batch.id
+
+    # 4. Prevent duplicate linking in TEACHER_BATCHES
+    existing_link = db.query(models.TeacherBatch).filter_by(
+        teacher_id=teacher.id, 
+        batch_id=batch.id
+    ).first()
+    
+    if existing_link:
+        raise HTTPException(status_code=409, detail="You are already assigned to this batch")
+
+    # 5. Link teacher and batch in junction table
+    new_link = models.TeacherBatch(teacher_id=teacher.id, batch_id=batch.id)
+    db.add(new_link)
+    db.commit()
+
+    return {"message": f"Batch '{batch.name}' assigned successfully!", "batch_id": batch.id, "batch_name": batch.name}
+    
+    
+#1.5 Returns all batches linked to teacher during quiz creations
+@app.get("/teacher/my-batches")
+def linked_batches(current_user: dict = Depends(require_teacher), 
+                   db: Session = Depends(get_db)):
+ 
+    # 1. Fetching teacher row object
+    teacher = db.query(models.Teacher).filter(models.Teacher.user_id == current_user.get("user_id")).first()
+    if not teacher:
+        return []
+
+    # 2. SQL JOIN: Fetch Batch details linked to this teacher via TeacherBatch
+    batches = db.query(models.Batch).join(
+        models.TeacherBatch, models.Batch.id == models.TeacherBatch.batch_id
+    ).filter(
+        models.TeacherBatch.teacher_id == teacher.id
+    ).all()
+
+    return [{"id": b.id, "name": b.name} for b in batches]
+    
+
 # @app.post("/create-quiz") ---> generate_preview ---> /save_quiz (to allow teacher to see the quiz if he assured with it can save in db)
 
 #2.1 (generation of quiz through llm asynchronously)
 @app.post("/generate_preview")
 async def generate_quiz(
-    batch_id: str = Form(...),
+    batch_id: int = Form(...),
     topic: str = Form(...),
     num_questions: int = Form(...),
     generation_mode: str = Form(...),
     start_page: Optional[int] = Form(None), # Optional kyunki sirf method 2 me aayega
     end_page: Optional[int] = Form(None),   # Optional kyunki sirf method 2 me aayega
     file: Optional[UploadFile] = File(None),
-    current_user: dict = Depends(verification)
+    current_user: dict = Depends(teacher_batch_ownership),
+    db: Session = Depends(get_db)
 ):  
-    #1  RBAC (Gatekeeper): Sirf teachers ko allow karo
-    if current_user.get("role") != "teacher":
-        raise HTTPException(status_code=403, detail="Access denied: Only teachers can create quizzes")
+    # authenticationa & RBAC already handled by :-check_teacher_authority         
     
-    # 2. Extract File Bytes (If uploaded)
+    # 1. Extract File Bytes (If uploaded)
     file_bytes = None
     if file:
         file_bytes = await file.file.read() # File ko memory me read kar liya and this is non-blocking
@@ -371,14 +336,10 @@ async def generate_quiz(
 
 #2.2 (saving the quiz after teacher confirmation)
 @app.post("/save_quiz")
-def save_quiz(quiz_to_save:dtos.QuizSaveSchema, current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-        #  RBAC: Sirf teachers ko allow karo
-        if current_user.get("role") != "teacher":
-            raise HTTPException(status_code=403, detail="Access denied: Only teachers can create quizzes")
-        
-        #  Token se username nikal kar uski user_ID fetch karenge
-        teacher = db.query(models.Teacher).filter(models.Teacher.user_id == current_user.get("user_id")).first()
-        
+def save_quiz(quiz_to_save:dtos.QuizSaveSchema, teacher = Depends(teacher_BatchAndQuiz_ownership), db: Session = Depends(get_db)):
+
+        # authenticationa & RBAC already handled by :-check_teacher_authority         
+            
         new_quiz = models.Quiz(
             title=f"{quiz_to_save.topic} Quiz",
             batch_id=quiz_to_save.batch_id, 
@@ -402,29 +363,33 @@ def save_quiz(quiz_to_save:dtos.QuizSaveSchema, current_user: dict = Depends(ver
         db.commit() 
         return {"message": "Quiz created successfully!", "quiz_id": new_quiz.id}
 
-#3
+#3 all quizzes created by teacher till date
 @app.get("/my-quizzes",response_model=List[dtos.teacher_created_quizes])
-def get_my_quizzes(current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-    # 1. RBAC Check
-    if current_user.get("role") != "teacher":
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    # 2. Current teacher ko DB me dhoondho
+def get_my_quizzes(current_user: dict = Depends(require_teacher), db: Session = Depends(get_db)):
+   
+    # 1. Current teacher ko DB me dhoondho
     teacher = db.query(models.Teacher).filter(models.Teacher.user_id== current_user.get("user_id")).first()
+    if not teacher:
+        return []
     
-    # 3. Sirf wahi quiz return karo jinka teacher_id match karta hai
-    quizzes = db.query(models.Quiz).filter(models.Quiz.teacher_id == teacher.id).all()
+    # SQL Join: 
+    quizzes = db.query(
+        models.Quiz.id,
+        models.Quiz.title,
+        models.Batch.name.label("batch_id")
+    ).join(
+        models.Batch, models.Quiz.batch_id == models.Batch.id
+    ).filter(
+        models.Quiz.teacher_id == teacher.id
+    ).all()
     
     return quizzes
 
 # 4. LEADERBOARD API (Teacher API)
 @app.get("/quiz/{quiz_id}/leaderboard")
-def get_leaderboard(quiz_id: int, current_user: dict = Depends(verification), db: Session = Depends(get_db)):
-    # 1. RBAC: Sirf teacher hi leaderboard dekh sakta hai
-    if current_user.get("role") != "teacher":
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    # 2. SQL Join & Sort: Attempts aur Users table ko jodna aur highest score upar rakhna
+def get_leaderboard(quiz_id: int, current_user = Depends(teacher_BatchAndQuiz_ownership), db: Session = Depends(get_db)):
+
+    # 1. SQL Join & Sort: Attempts aur Users table ko jodna aur highest score upar rakhna
     leaderboard_data = db.query(
         models.Student.student_name, 
         models.Attempt.score
@@ -436,6 +401,169 @@ def get_leaderboard(quiz_id: int, current_user: dict = Depends(verification), db
     result = [{"username": row.student_name, "score": row.score} for row in leaderboard_data]
     
     return {"quiz_id": quiz_id, "leaderboard": result}
+
+# ==========================================
+# STUDENT APIs
+# ==========================================
+
+# 1.0 fetching all batches available to let student decide their own batch
+@app.get("/all-batches")
+def get_batches(current_user:dict=Depends(require_student),
+                db: Session= Depends(get_db)):
+   
+    # 1. Fetch all available batches, sorted alphabetically for a clean UI dropdown
+    batches = db.query(models.Batch).order_by(models.Batch.name).all()
+
+    # 2. Return list of dicts so frontend can map batch name -> batch id
+    return [{"id": b.id, "name": b.name} for b in batches]
+
+
+# 1.1 student profile data saving in db
+@app.post("/student/complete_profile")
+def complete_profile(profile: dtos.StudentProfileCreate, current_user: dict = Depends(require_student), db: Session = Depends(get_db)):
+    #check for already saved profile
+    user_id=current_user.get("user_id")
+    existing_student = db.query(models.Student).filter(models.Student.user_id == user_id).first()
+    if existing_student:
+        raise HTTPException(status_code=409, detail="Profile already exists!")
+    
+    # Verifying the batch_id actually exists in the 'batches' table before inserting
+    batch_exists = db.query(models.Batch).filter(models.Batch.id == profile.batch_id).first()
+    if not batch_exists:
+        raise HTTPException(status_code=404, detail="Selected batch does not exist")
+        
+    #  Create the domain record linking to the auth user_id
+    new_student = models.Student(
+        user_id=user_id,
+        student_name=profile.student_name,
+        email=profile.email,
+        contact=profile.contact,
+        batch_id=profile.batch_id
+    )
+    
+    db.add(new_student)
+    db.commit()
+    
+    return {"message": "Profile completed successfully!"}
+
+#1.2 checking the profile complete before accessing other services
+@app.get("/student/check_profile")
+def check_profile(current_user: dict = Depends(require_student), db: Session = Depends(get_db)):
+    
+    # Check if a student record exists for this user_id
+    student = db.query(models.Student).filter(models.Student.user_id == current_user.get("user_id")).first()
+    return {"profile_completed": student is not None}
+
+#1.3 provide the profile data to student on request
+@app.get("/student/me")
+def get_student_profile(current_user: dict = Depends(require_student), db: Session = Depends(get_db)):
+
+    # SQL Join: Fetching student details
+    result = db.query(
+        models.Student.student_name,
+        models.Student.email,
+        models.Student.contact,
+        models.Batch.name.label("batch_name")
+    ).join(
+        models.Batch, models.Student.batch_id == models.Batch.id
+    ).filter(
+        models.Student.user_id == current_user.get("user_id")
+    ).first()
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="Profile not found")
+        
+    return {
+        "name": result.student_name,
+        "email": result.email,
+        "contact": result.contact,
+        "batch_id": result.batch_name  # Keeps key as 'batch_id' so frontend.py works untouched!
+    }
+
+# 2 AVAILABLE QUIZZES (Batch based filtering)
+@app.get("/available-quizzes")
+def get_available_quizzes(current_user: dict = Depends(require_student), db: Session = Depends(get_db)):
+
+    # 1. extracting the Student ID & batch
+    student = db.query(models.Student).filter(models.Student.user_id == current_user.get("user_id")).first()
+    if not student:
+        return [] # Returns an empty list 
+
+    # 2. Subquery: Wo saari Quiz IDs, that student has already attempted
+    attempted_quiz_ids = db.query(models.Attempt.quiz_id).filter(models.Attempt.student_id == student.id)
+
+    # 3. Main Query: Batch match karo AUR (~in_) filter lagao ki ID attempted list me NA ho
+    available_quizzes = db.query(models.Quiz).filter(
+             models.Quiz.batch_id == student.batch_id,
+             ~models.Quiz.id.in_(attempted_quiz_ids)  # '~' ka matlab SQL me NOT hota hai
+        ).all()
+    
+    return available_quizzes
+
+# 3. GET QUIZ BY ID (For attempting the quiz - Hides correct answers)
+@app.get("/quiz/{quiz_id}", response_model=dtos.QuizSentDB)
+def get_quiz_to_attempt(quiz_id: int, student = Depends(check_student_authority), db: Session = Depends(get_db)):
+
+    quiz=db.query(models.Quiz).filter(models.Quiz.id==quiz_id).first()
+    
+    questions = db.query(models.Question).filter(models.Question.quiz_id == quiz_id).all()
+    
+    #  Pydantic khud 'correct_answer' hata dega.
+    return {"quiz_title": quiz.title, "questions": questions}
+
+# 4. SUBMIT QUIZ & EVALUATION ENGINE
+@app.post("/submit-quiz")
+def submit_quiz(submission: dtos.QuizSubmit, student = Depends(check_student_authority), db: Session = Depends(get_db)):
+    # Authenticationa & TBAC already handled by check_student_authority
+    
+    # Check if student already submitted this quiz
+    #"Double Submit" ya "Race Condition" kehte hain,network slow hone ki wajah se request retry ho jate hai
+    existing_attempt = db.query(models.Attempt).filter_by(
+        student_id=student.id, 
+        quiz_id=submission.quiz_id
+    ).first()
+    
+    if existing_attempt:
+        raise HTTPException(status_code=409, detail="You have already attempted this quiz!")
+
+    #  Database se saare questions ek baar me fetch kar lo
+    db_questions = db.query(models.Question).filter(models.Question.quiz_id == submission.quiz_id).all()
+    
+    # Simple loop se score calculate karo
+    score = 0
+    for student_ans in submission.answers:
+        for real_q in db_questions:
+            # Agar Question ID match kare AUR answer bhi match kare
+            if student_ans.question_id == real_q.id and student_ans.selected_option == real_q.correct_answer:
+                score += 1
+                break  # Match mil gaya, agle answer par jao
+                
+    # Score DB me save karo
+    attempt = models.Attempt(student_id=student.id, quiz_id=submission.quiz_id, score=score)
+    db.add(attempt)
+    db.commit()
+    
+    return {"message": "Quiz submitted Successfully!", "total_Questions": len(db_questions),"score": score}
+
+# 5. MY SCORES API (Student)
+@app.get("/my-scores", response_model=List[dtos.ScoreResponse])
+def get_my_scores(current_user: dict = Depends(require_student), db: Session = Depends(get_db)):
+      
+    student = db.query(models.Student).filter(models.Student.user_id == current_user.get("user_id")).first()
+    if not student:
+        return []
+    
+    # 1. SQL Join: Attempts aur Quiz table ko jodna
+    scores_data = db.query(
+        models.Attempt.quiz_id,
+        models.Quiz.title.label("quiz_title"),
+        models.Attempt.score
+    ).join(models.Quiz, models.Attempt.quiz_id == models.Quiz.id)\
+     .filter(models.Attempt.student_id == student.id).all()
+    
+    # FastAPI aur Pydantic automatically is data ko List[ScoreResponse] me format kar denge
+    return scores_data
+
 
 @app.get("/")
 def health_check():

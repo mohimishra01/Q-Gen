@@ -15,7 +15,7 @@ class Student(Base):
     student_name = Column(String, nullable=False)
     email = Column(String,unique=True, index=True)
     contact = Column(String, nullable=False, unique=True, index=True)
-    batch_id = Column(String,nullable=False)
+    batch_id = Column(Integer, ForeignKey("batches.id"), nullable=False)
 
 class Teacher(Base):
     __tablename__ = "teachers"
@@ -26,13 +26,24 @@ class Teacher(Base):
     email = Column(String, unique=True, index=True)
     contact = Column(String, nullable=False, unique=True, index=True)                
     department = Column(String, nullable=False)
-   
+
+class Batch(Base):
+    __tablename__ = "batches"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False, index=True) # e.g., "CS-2026"
+
+class TeacherBatch(Base):
+    __tablename__ = "teacher_batches"
+    id = Column(Integer, primary_key=True, index=True)
+    teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=False)
+    batch_id = Column(Integer, ForeignKey("batches.id"), nullable=False)
+
 class Quiz(Base):
     __tablename__ = "quizzes"
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, nullable=False)
     teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=False)
-    batch_id = Column(String, index=True, nullable=False)
+    batch_id = Column(Integer, ForeignKey("batches.id"), index=True, nullable=False)
 
 class Question(Base):
     __tablename__ = "questions"
