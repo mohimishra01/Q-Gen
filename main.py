@@ -377,7 +377,7 @@ def save_quiz(quiz_to_save:dtos.QuizSaveSchema, current_user: dict = Depends(ver
             raise HTTPException(status_code=403, detail="Access denied: Only teachers can create quizzes")
         
         #  Token se username nikal kar uski user_ID fetch karenge
-        teacher = db.query(models.User).filter(models.User.username == current_user.get("sub")).first()
+        teacher = db.query(models.Teacher).filter(models.Teacher.user_id == current_user.get("user_id")).first()
         
         new_quiz = models.Quiz(
             title=f"{quiz_to_save.topic} Quiz",
@@ -410,7 +410,7 @@ def get_my_quizzes(current_user: dict = Depends(verification), db: Session = Dep
         raise HTTPException(status_code=403, detail="Access denied")
     
     # 2. Current teacher ko DB me dhoondho
-    teacher = db.query(models.User).filter(models.User.username == current_user.get("sub")).first()
+    teacher = db.query(models.Teacher).filter(models.Teacher.user_id== current_user.get("user_id")).first()
     
     # 3. Sirf wahi quiz return karo jinka teacher_id match karta hai
     quizzes = db.query(models.Quiz).filter(models.Quiz.teacher_id == teacher.id).all()

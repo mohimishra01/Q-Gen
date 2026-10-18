@@ -67,7 +67,7 @@ async def generate_quiz_via_llm(mode: str, topic: str, count: int, file_bytes: b
     # LangChain ka sabse powerful method - forces output into our Pydantic schema
     structured_llm = llm.with_structured_output(dtos.LLMQuizOutput)
     
-    context_text = ""
+    pdf_text = ""
     if mode in ["generate_from_content", "extract_from_quiz"] and file_bytes:
         pdf_text = extract_text_from_pdf(file_bytes, start_page, end_page)
 
@@ -101,7 +101,7 @@ async def generate_quiz_via_llm(mode: str, topic: str, count: int, file_bytes: b
                "2. IF the text ONLY provides the correct answer: You MUST generate 3 plausible but incorrect distractors to create a 4-option format.\n"
                "Ensure all 4 options are unique.\n\n"
                "CRITICAL: You MUST use the provided extraction tool to return the data in a structured format. Do not output plain text.\n\n"
-               "Exam Text:\n{context_text}"),
+               "Exam Text:\n{pdf_text}"),
             ("user", "Extract the quiz strictly following the topic check and tool format.")
         ])
 
@@ -119,7 +119,7 @@ async def generate_quiz_via_llm(mode: str, topic: str, count: int, file_bytes: b
             result = await chain.ainvoke({ #Asynchronous Invoke
                 "count": deficit,
                 "topic": topic,
-                "context_text": context_text
+                "pdf_text": pdf_text
             })
             
             new_batch = [q.model_dump() for q in result.questions] if result and result.questions else []
