@@ -376,7 +376,7 @@ def get_my_quizzes(current_user: dict = Depends(require_teacher), db: Session = 
     quizzes = db.query(
         models.Quiz.id,
         models.Quiz.title,
-        models.Batch.name.label("batch_id")
+        models.Batch.name
     ).join(
         models.Batch, models.Quiz.batch_id == models.Batch.id
     ).filter(

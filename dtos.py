@@ -82,6 +82,6 @@ class ScoreResponse(BaseModel):
 class teacher_created_quizes(BaseModel):
     id: int
     title: str
-    batch_id: int
+    batch_name: str
 
     model_config = ConfigDict(from_attributes=True)
