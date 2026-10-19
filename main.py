@@ -319,7 +319,7 @@ async def generate_quiz(
     # 1. Extract File Bytes (If uploaded)
     file_bytes = None
     if file:
-        file_bytes = await file.file.read() # File ko memory me read kar liya and this is non-blocking
+        file_bytes = await file.read() # File ko memory me read kar liya and this is non-blocking
    
     # 3. LANGCHAIN AI PIPELINE (llm question generation)
     
