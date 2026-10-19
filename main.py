@@ -2,7 +2,6 @@
 from fastapi import FastAPI,Depends,HTTPException
 from fastapi import Form, File, UploadFile
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel
 from typing import Optional,List
 
 #for jwt creation and password hashing
@@ -13,6 +12,7 @@ from passlib.context import CryptContext
 #for database integration
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from sqlalchemy.exc import IntegrityError ## duplicate emaail and contact
 
 # to load used signing algo(signature) & secret_key for jwt token creation from.env
 import os
@@ -27,7 +27,7 @@ from database import engine, SessionLocal
 
 
 # Yahan par magic hota hai! Ye line models.py ki saari tables DB me create kar degi.
-models.Base.metadata.create_all(bind=engine)
+models.Base.metadata.create_all(bind=engine) 
 
 app = FastAPI()
 
@@ -132,7 +132,7 @@ def check_student_authority(
     if not student:
         raise HTTPException(status_code=403, detail="Complete your student profile first")
 
-    target_quiz_id = quiz_id if quiz_id is not None else (submission.quiz_id if submission else None)
+    target_quiz_id = submission.quiz_id if submission else quiz_id
     quiz = db.query(models.Quiz).filter(models.Quiz.id == target_quiz_id).first()
     if not quiz:
         raise HTTPException(status_code=404, detail="Quiz not found")
@@ -203,7 +203,11 @@ def complete_profile(profile: dtos.TeacherProfileCreate, current_user: dict = De
     )
     
     db.add(new_teacher)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="That email or contact number is already in use")
     
     return {"message": "Profile completed successfully!"}
 
@@ -218,7 +222,7 @@ def check_profile(current_user: dict = Depends(require_teacher), db: Session = D
 
 
 #1.3 to provide profile data to teacher on request
-@app.get("/teacher/me")
+@app.get("/teacher/me", response_model=dtos.TeacherProfileOut)
 def get_teacher_profile(current_user: dict = Depends(require_teacher), db: Session = Depends(get_db)):
    
     # 1. Fetching the teacher roe object 
@@ -251,9 +255,9 @@ def batch_assignment(batch_data: dtos.BatchAssign,
     clean_batch_name = batch_data.batch_name.strip().upper()
 
     # 3. Get-or-Create in BATCHES table
-    batch = db.query(models.Batch).filter(models.Batch.name == clean_batch_name).first()
+    batch = db.query(models.Batch).filter(models.Batch.batch_name == clean_batch_name).first()
     if not batch:
-        batch = models.Batch(name=clean_batch_name)
+        batch = models.Batch(batch_name=clean_batch_name)
         db.add(batch)
         db.commit()
         db.refresh(batch)  # Fetches the auto-generated batch.id
@@ -272,11 +276,11 @@ def batch_assignment(batch_data: dtos.BatchAssign,
     db.add(new_link)
     db.commit()
 
-    return {"message": f"Batch '{batch.name}' assigned successfully!", "batch_id": batch.id, "batch_name": batch.name}
+    return {"message": f"Batch '{batch.batch_name}' assigned successfully!", "batch_id": batch.id, "batch_name": batch.batch_name}
     
     
 #1.5 Returns all batches linked to teacher during quiz creations
-@app.get("/teacher/my-batches")
+@app.get("/teacher/my-batches", response_model=List[dtos.BatchOut])
 def linked_batches(current_user: dict = Depends(require_teacher), 
                    db: Session = Depends(get_db)):
  
@@ -292,9 +296,9 @@ def linked_batches(current_user: dict = Depends(require_teacher),
         models.TeacherBatch.teacher_id == teacher.id
     ).all()
 
-    return [{"id": b.id, "name": b.name} for b in batches]
-    
+    return batches
 
+    
 # @app.post("/create-quiz") ---> generate_preview ---> /save_quiz (to allow teacher to see the quiz if he assured with it can save in db)
 
 #2.1 (generation of quiz through llm asynchronously)
@@ -364,7 +368,7 @@ def save_quiz(quiz_to_save:dtos.QuizSaveSchema, teacher = Depends(teacher_BatchA
         return {"message": "Quiz created successfully!", "quiz_id": new_quiz.id}
 
 #3 all quizzes created by teacher till date
-@app.get("/my-quizzes",response_model=List[dtos.teacher_created_quizes])
+@app.get("/my-quizzes",response_model=List[dtos.TeacherOwnQuiz])
 def get_my_quizzes(current_user: dict = Depends(require_teacher), db: Session = Depends(get_db)):
    
     # 1. Current teacher ko DB me dhoondho
@@ -376,7 +380,7 @@ def get_my_quizzes(current_user: dict = Depends(require_teacher), db: Session = 
     quizzes = db.query(
         models.Quiz.id,
         models.Quiz.title,
-        models.Batch.name
+        models.Batch.batch_name
     ).join(
         models.Batch, models.Quiz.batch_id == models.Batch.id
     ).filter(
@@ -386,7 +390,7 @@ def get_my_quizzes(current_user: dict = Depends(require_teacher), db: Session = 
     return quizzes
 
 # 4. LEADERBOARD API (Teacher API)
-@app.get("/quiz/{quiz_id}/leaderboard")
+@app.get("/quiz/{quiz_id}/leaderboard", response_model=dtos.LeaderboardResponse)
 def get_leaderboard(quiz_id: int, current_user = Depends(teacher_BatchAndQuiz_ownership), db: Session = Depends(get_db)):
 
     # 1. SQL Join & Sort: Attempts aur Users table ko jodna aur highest score upar rakhna
@@ -397,26 +401,21 @@ def get_leaderboard(quiz_id: int, current_user = Depends(teacher_BatchAndQuiz_ow
      .filter(models.Attempt.quiz_id == quiz_id)\
      .order_by(desc(models.Attempt.score)).all()
     
-    # 3. Data Formatting: Frontend ke liye clean JSON (List of dictionaries) 
-    result = [{"username": row.student_name, "score": row.score} for row in leaderboard_data]
-    
-    return {"quiz_id": quiz_id, "leaderboard": result}
+    return {"quiz_id": quiz_id, "leaderboard": leaderboard_data}
 
 # ==========================================
 # STUDENT APIs
 # ==========================================
 
 # 1.0 fetching all batches available to let student decide their own batch
-@app.get("/all-batches")
+@app.get("/all-batches",response_model=List[dtos.BatchOut])
 def get_batches(current_user:dict=Depends(require_student),
                 db: Session= Depends(get_db)):
    
     # 1. Fetch all available batches, sorted alphabetically for a clean UI dropdown
-    batches = db.query(models.Batch).order_by(models.Batch.name).all()
+    batches = db.query(models.Batch).order_by(models.Batch.batch_name).all()
 
-    # 2. Return list of dicts so frontend can map batch name -> batch id
-    return [{"id": b.id, "name": b.name} for b in batches]
-
+    return batches
 
 # 1.1 student profile data saving in db
 @app.post("/student/complete_profile")
@@ -442,7 +441,11 @@ def complete_profile(profile: dtos.StudentProfileCreate, current_user: dict = De
     )
     
     db.add(new_student)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="That email or contact number is already in use")
     
     return {"message": "Profile completed successfully!"}
 
@@ -455,7 +458,7 @@ def check_profile(current_user: dict = Depends(require_student), db: Session = D
     return {"profile_completed": student is not None}
 
 #1.3 provide the profile data to student on request
-@app.get("/student/me")
+@app.get("/student/me", response_model=dtos.StudentProfileOut)
 def get_student_profile(current_user: dict = Depends(require_student), db: Session = Depends(get_db)):
 
     # SQL Join: Fetching student details
@@ -463,7 +466,7 @@ def get_student_profile(current_user: dict = Depends(require_student), db: Sessi
         models.Student.student_name,
         models.Student.email,
         models.Student.contact,
-        models.Batch.name.label("batch_name")
+        models.Batch.batch_name
     ).join(
         models.Batch, models.Student.batch_id == models.Batch.id
     ).filter(
@@ -477,11 +480,11 @@ def get_student_profile(current_user: dict = Depends(require_student), db: Sessi
         "name": result.student_name,
         "email": result.email,
         "contact": result.contact,
-        "batch_id": result.batch_name  # Keeps key as 'batch_id' so frontend.py works untouched!
+        "batch_name": result.batch_name 
     }
 
 # 2 AVAILABLE QUIZZES (Batch based filtering)
-@app.get("/available-quizzes")
+@app.get("/available-quizzes", response_model=List[dtos.AvailableQuizOut])
 def get_available_quizzes(current_user: dict = Depends(require_student), db: Session = Depends(get_db)):
 
     # 1. extracting the Student ID & batch
@@ -512,7 +515,7 @@ def get_quiz_to_attempt(quiz_id: int, student = Depends(check_student_authority)
     return {"quiz_title": quiz.title, "questions": questions}
 
 # 4. SUBMIT QUIZ & EVALUATION ENGINE
-@app.post("/submit-quiz")
+@app.post("/submit-quiz", response_model=dtos.SubmitQuizResponse)
 def submit_quiz(submission: dtos.QuizSubmit, student = Depends(check_student_authority), db: Session = Depends(get_db)):
     # Authenticationa & TBAC already handled by check_student_authority
     
@@ -529,21 +532,18 @@ def submit_quiz(submission: dtos.QuizSubmit, student = Depends(check_student_aut
     #  Database se saare questions ek baar me fetch kar lo
     db_questions = db.query(models.Question).filter(models.Question.quiz_id == submission.quiz_id).all()
     
-    # Simple loop se score calculate karo
-    score = 0
-    for student_ans in submission.answers:
-        for real_q in db_questions:
-            # Agar Question ID match kare AUR answer bhi match kare
-            if student_ans.question_id == real_q.id and student_ans.selected_option == real_q.correct_answer:
-                score += 1
-                break  # Match mil gaya, agle answer par jao
-                
+    # storing the student answer in map to prevent duplicate answer injection with all options 
+    answers = {a.question_id: a.selected_option for a in submission.answers}
+    score = sum(1 for q in db_questions if answers.get(q.id) == q.correct_answer)      
+    
     # Score DB me save karo
     attempt = models.Attempt(student_id=student.id, quiz_id=submission.quiz_id, score=score)
     db.add(attempt)
     db.commit()
     
-    return {"message": "Quiz submitted Successfully!", "total_Questions": len(db_questions),"score": score}
+    return {"message": "Quiz submitted Successfully!",
+            "total_Questions": len(db_questions),
+            "score": score}
 
 # 5. MY SCORES API (Student)
 @app.get("/my-scores", response_model=List[dtos.ScoreResponse])

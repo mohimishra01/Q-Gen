@@ -88,14 +88,6 @@ def auth_page():
 
 def teacher_dashboard():
     
-    # Logout Button
-    col1, col2 = st.columns([8, 1]) #col1 is left empty to work as spacer to place logout button in the extreme right 
-    with col2:
-        if st.button("Logout"):
-            st.session_state.token = None
-            st.session_state.role = None
-            st.rerun()
-
     headers = {"Authorization": f"Bearer {st.session_state.token}"}
 
     # profile checking before moving to other features
@@ -159,12 +151,7 @@ def teacher_dashboard():
     st.sidebar.markdown("<br><br><br><br><br>", unsafe_allow_html=True)
     st.sidebar.divider()
     if st.sidebar.button("🚪 Logout", use_container_width=True):
-        st.session_state.token = None
-        st.session_state.role = None
-        if "preview_quiz" in st.session_state:
-            del st.session_state.preview_quiz
-        if "profile_data" in st.session_state:
-            del st.session_state.profile_data
+        st.session_state.clear()
         st.rerun()
 
     # --- PAGE: MY PROFILE ---
@@ -197,7 +184,7 @@ def teacher_dashboard():
             if assigned:
                 st.write("### Your Active Batches:")
                 for b in assigned:
-                    st.info(f"🏫 **{b['name']}** (Batch ID: {b['id']})")
+                    st.info(f"🏫 **{b['batch_name']}** (Batch ID: {b['id']})")
             else:
                 st.info("You are not assigned to any batches yet.")
         
@@ -253,7 +240,7 @@ def teacher_dashboard():
         teacher_batch_map = {}
         if my_batches_res.status_code == 200:
             for b in my_batches_res.json():
-                teacher_batch_map[b["name"]] = b["id"]
+                teacher_batch_map[b["batch_name"]] = b["id"]
         
         with st.form("Create Quiz"):
             col_a, col_b = st.columns(2)
@@ -386,7 +373,7 @@ def teacher_dashboard():
         if quiz_res.status_code == 200:
             quizzes = quiz_res.json()
             if quizzes:
-                quiz_options = {f"{q['title']} (Batch: {q['batch_id']})": q['id'] for q in quizzes}
+                quiz_options = {f"{q['title']} (Batch: {q['batch_name']})": q['id'] for q in quizzes}
                 
                 # Align dropdown and button horizontally
                 col_a, col_b = st.columns([3, 1])
@@ -419,7 +406,7 @@ def teacher_dashboard():
                                 
                                 formatted_data.append({
                                     "RANK": f"{rank}{suffix}",
-                                    "NAME": user_info.get("username", "").title(),
+                                    "NAME": user_info.get("student_name", "").title(),
                                     "SCORE": user_info.get("score", 0) 
                                 })
                             
@@ -460,7 +447,7 @@ def student_dashboard():
         batch_map = {}
         if batches_res.status_code == 200:
             for b in batches_res.json():
-                batch_map[b["name"]] = b["id"]
+                batch_map[b["batch_name"]] = b["id"]
 
         with st.form("profile_setup_form"):
             st.write("### Profile Setup")
@@ -516,12 +503,7 @@ def student_dashboard():
     st.sidebar.markdown("<br><br><br><br><br>", unsafe_allow_html=True)
     st.sidebar.divider()
     if st.sidebar.button("🚪 Logout", use_container_width=True):
-        st.session_state.token = None
-        st.session_state.role = None
-        if "profile_data" in st.session_state:
-            del st.session_state.profile_data
-        if "active_quiz_id" in st.session_state:
-            del st.session_state.active_quiz_id    
+        st.session_state.clear()   
         st.rerun()
     
 
@@ -542,7 +524,7 @@ def student_dashboard():
             st.info(f"👤 **Name:** {p.get('name', 'N/A')}")
             st.info(f"📧 **Email:** {p.get('email', 'N/A')}")
             st.info(f"📞 **Contact:** {p.get('contact', 'N/A')}")
-            st.info(f"🏫 **Batch Id:** {p.get('batch_id', 'N/A')}")
+            st.info(f"🏫 **Batch:** {p.get('batch_name', 'N/A')}")
 
     
     # ---  LIVE QUIZZES ---

@@ -121,9 +121,19 @@ async def generate_quiz_via_llm(mode: str, topic: str, count: int, file_bytes: b
                 "topic": topic,
                 "pdf_text": pdf_text
             })
+
+            #model_dump() convert the pydantic dto object to python dict
+            raw_batch = [q.model_dump() for q in result.questions] if result and result.questions else []
             
-            new_batch = [q.model_dump() for q in result.questions] if result and result.questions else []
-            
+            # Ensure correct_answer strictly exists within the options list to prevent unwinnable questions
+            new_batch = []
+            for q in raw_batch:
+                # Check if correct_answer matches any option (using exact string match)
+                if q['correct_answer'] in q['options']:
+                    new_batch.append(q)
+                else:
+                    print(f"Dropped invalid LLM question (correct_answer mismatch): {q['question_text']}")
+
             # 2. duplicacy removal from  new batch against ALREADY accepted questions
             final_questions = deduplicate_llm_quiz(new_batch, existing_questions=final_questions)
             

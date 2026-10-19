@@ -30,7 +30,7 @@ class Teacher(Base):
 class Batch(Base):
     __tablename__ = "batches"
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, nullable=False, index=True) # e.g., "CS-2026"
+    batch_name = Column(String, unique=True, nullable=False, index=True) # e.g., "CS-2026"
 
 class TeacherBatch(Base):
     __tablename__ = "teacher_batches"
