@@ -14,6 +14,30 @@ load_dotenv()
 #Frontend -> Backend Endpoint
 API_URL = os.getenv("API_URL")
 
+
+import requests
+import streamlit as st
+
+API_URL = os.getenv("API_URL")
+
+
+# --- BACKEND COLD START WARM-UP GUARD ---
+if "backend_warm" not in st.session_state:
+    with st.spinner("Waking up AI backend server..."):
+        try:
+            # 35 seconds max ceiling; if server is ready in 3s, it proceeds in 3s!
+            res = requests.get(f"{API_URL}/", timeout=35)
+            
+            if res.status_code == 200 and res.json().get("status") == "ok":
+                st.session_state.backend_warm = True
+            else:
+                st.session_state.backend_warm = False
+        except requests.exceptions.RequestException:
+            st.session_state.backend_warm = False
+            st.error("Server is waking up from sleep. Please wait a moment and refresh.")
+
+
+
 # Ye variables browser refresh hone par bhi data store rakhenge
 if "token" not in st.session_state:
     st.session_state.token = None
